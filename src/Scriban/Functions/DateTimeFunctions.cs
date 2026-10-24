@@ -49,6 +49,9 @@ namespace Scriban.Functions
     {
         private const string FormatKey = "format";
 
+        // LimitToString of the TemplateContext calling `date.to_string`, 0 (disabled) otherwise
+        [ThreadStatic] private static int _toStringLimit;
+
         // This is exposed as well as default_format
         public const string DefaultFormat = "%d %b %Y";
 
@@ -432,7 +435,7 @@ namespace Scriban.Functions
                 return null;
             }
             var outputCulture = (output_culture is not null ? CultureInfo.GetCultureInfo(output_culture) : context.CurrentCulture) ?? context.CurrentCulture;
-            return FormatDateTime(datetime.Value, output_pattern ?? DefaultFormat, outputCulture);
+            return FormatDateTime(datetime.Value, output_pattern ?? DefaultFormat, outputCulture, context.LimitToString);
         }
 
         public override IScriptObject Clone(bool deep)
@@ -531,10 +534,10 @@ namespace Scriban.Functions
                 pattern = "%g " + Format;
             }
 
-            return FormatDateTime(datetime.Value, pattern, culture);
+            return FormatDateTime(datetime.Value, pattern, culture, _toStringLimit);
         }
 
-        private static string FormatDateTime(DateTime datetime, string pattern, CultureInfo culture)
+        private static string FormatDateTime(DateTime datetime, string pattern, CultureInfo culture, int limitToString)
         {
             var builder = new StringBuilder();
 
@@ -556,16 +559,20 @@ namespace Scriban.Functions
                     if (Formats.TryGetValue(format, out var formatterPair))
                     {
                         var formatter = formatterPair.Item1;
-                        builder.Append(formatter.Invoke(datetime, culture));
+                        var text = formatter.Invoke(datetime, culture);
+                        StringFunctions.VerifyResultStringLength(limitToString, (long)builder.Length + text.Length);
+                        builder.Append(text);
                     }
                     else
                     {
+                        StringFunctions.VerifyResultStringLength(limitToString, (long)builder.Length + 2);
                         builder.Append('%');
                         builder.Append(format);
                     }
                 }
                 else
                 {
+                    StringFunctions.VerifyResultStringLength(limitToString, (long)builder.Length + 1);
                     builder.Append(c);
                 }
             }
@@ -623,7 +630,17 @@ namespace Scriban.Functions
         private string? ToStringTrampoline(TemplateContext context, DateTime? date, string pattern, string? culture = null)
         {
             var cultureObject = culture is not null ? CultureInfo.GetCultureInfo(culture) : null;
-            return ToString(date, pattern, cultureObject ?? context.CurrentCulture);
+            // Pass LimitToString to FormatDateTime through ToString, which has no TemplateContext parameter
+            var previousLimit = _toStringLimit;
+            _toStringLimit = context.LimitToString;
+            try
+            {
+                return ToString(date, pattern, cultureObject ?? context.CurrentCulture);
+            }
+            finally
+            {
+                _toStringLimit = previousLimit;
+            }
         }
     }
 }

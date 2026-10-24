@@ -4,6 +4,7 @@
 
 #nullable enable
 
+using System;
 using System.Text.RegularExpressions;
 using Scriban.Runtime;
 
@@ -26,6 +27,36 @@ namespace Scriban.Functions
 #endif
     class RegexFunctions : ScriptObject
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RegexFunctions"/> class.
+        /// </summary>
+        public RegexFunctions()
+        {
+            // Override the imported `escape` function to verify LimitToString with the TemplateContext
+            SetValue("escape", DynamicCustomFunction.Create(new Func<TemplateContext, string, string>(EscapeWithLimit)), true);
+        }
+
+        private static string EscapeWithLimit(TemplateContext context, string pattern)
+        {
+            if (pattern is not null && context.LimitToString > 0 && (long)pattern.Length * 2 > context.LimitToString)
+            {
+                long length = pattern.Length;
+                foreach (var c in pattern)
+                {
+                    // Characters escaped by Regex.Escape, each one with an additional `\`
+                    switch (c)
+                    {
+                        case '\t': case '\n': case '\f': case '\r': case ' ': case '#': case '$': case '(': case ')':
+                        case '*': case '+': case '.': case '?': case '[': case '\\': case '^': case '{': case '|':
+                            length++;
+                            break;
+                    }
+                }
+                StringFunctions.VerifyResultStringLength(context, length);
+            }
+            return Escape(pattern!);
+        }
+
         /// <summary>
         /// Escapes a minimal set of characters (`\`, `*`, `+`, `?`, `|`, `{`, `[`, `(`,`)`, `^`, `$`,`.`, `#`, and white space)
         /// by replacing them with their escape codes.
@@ -156,7 +187,25 @@ namespace Scriban.Functions
         /// </remarks>
         public static string Replace(TemplateContext context, string text, string pattern, string replace, string? options = null)
         {
-            return Regex.Replace(text, pattern, replace, GetOptions(options), context.RegexTimeOut);
+            if (context.LimitToString <= 0)
+            {
+                return Regex.Replace(text, pattern, replace, GetOptions(options), context.RegexTimeOut);
+            }
+
+            // Track the length of the output produced so far (including substitutions like `$0`)
+            // to verify LimitToString before the result is built.
+            long inputConsumed = 0;
+            long outputLength = 0;
+            var result = Regex.Replace(text, pattern, match =>
+            {
+                var replacement = match.Result(replace);
+                outputLength += match.Index - inputConsumed + replacement.Length;
+                inputConsumed = match.Index + match.Length;
+                StringFunctions.VerifyResultStringLength(context, outputLength);
+                return replacement;
+            }, GetOptions(options), context.RegexTimeOut);
+            StringFunctions.VerifyResultStringLength(context, result.Length);
+            return result;
         }
 
         /// <summary>

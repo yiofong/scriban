@@ -38,6 +38,42 @@ namespace Scriban.Functions
         private static void ReleaseBuilder(StringBuilder builder) => builder.Length = 0;
 
         /// <summary>
+        /// Initializes a new instance of the <see cref="StringFunctions"/> class.
+        /// </summary>
+        public StringFunctions()
+        {
+            // Override the imported `escape` function to verify LimitToString with the TemplateContext
+            SetValue("escape", DynamicCustomFunction.Create(new Func<TemplateContext, string?, string?>(EscapeWithLimit)), true);
+        }
+
+        private static string? EscapeWithLimit(TemplateContext context, string? text)
+        {
+            if (text is not null && context.LimitToString > 0 && (long)text.Length * 4 > context.LimitToString)
+            {
+                VerifyResultStringLength(context, GetEscapedLength(text));
+            }
+            return Escape(text);
+        }
+
+        private static long GetEscapedLength(string text)
+        {
+            long length = text.Length;
+            foreach (var c in text)
+            {
+                if (c < 32 || c == '"' || c == '\\')
+                {
+                    // See Escape: `\x` + 2 hex digits for control characters without a short escape, otherwise 2 characters
+                    length += c switch
+                    {
+                        '"' or '\\' or '\a' or '\b' or '\t' or '\r' or '\v' or '\f' or '\n' => 1,
+                        _ => 3
+                    };
+                }
+            }
+            return length;
+        }
+
+        /// <summary>
         /// Escapes a string with escape characters.
         /// </summary>
         /// <param name="text">The input string</param>
@@ -565,6 +601,22 @@ namespace Scriban.Functions
         /// </remarks>
         public static string Replace(TemplateContext context, string? text, string? match, string? replace)
         {
+            if (context is null) throw new ArgumentNullException(nameof(context));
+
+            // Verify the length of the result before building it
+            if (context.LimitToString > 0 && text is not null && match is not null && match.Length > 0 && replace is not null && replace.Length > match.Length)
+            {
+                long length = text.Length;
+                var lengthDelta = replace.Length - match.Length;
+                var index = text.IndexOf(match, StringComparison.Ordinal);
+                while (index >= 0)
+                {
+                    length += lengthDelta;
+                    VerifyResultStringLength(context, length);
+                    index = text.IndexOf(match, index + match.Length, StringComparison.Ordinal);
+                }
+            }
+
             var result = Replace(text, match, replace);
             VerifyResultStringLength(context, result.Length);
             return result;
@@ -1280,14 +1332,53 @@ namespace Scriban.Functions
             }
         }
 
-        private static void VerifyResultStringLength(TemplateContext context, long length)
+        internal static void VerifyResultStringLength(TemplateContext context, long length)
         {
             if (context is null) throw new ArgumentNullException(nameof(context));
 
-            if (context.LimitToString > 0 && length > context.LimitToString)
+            VerifyResultStringLength(context.LimitToString, length);
+        }
+
+        internal static void VerifyResultStringLength(int limitToString, long length)
+        {
+            if (limitToString > 0 && length > limitToString)
             {
-                throw new InvalidOperationException($"The resulting string length exceeds the configured LimitToString `{context.LimitToString}`.");
+                throw new InvalidOperationException($"The resulting string length exceeds the configured LimitToString `{limitToString}`.");
             }
+        }
+
+        /// <summary>
+        /// Verifies that the precision specifier of a standard format string (e.g `F2`, `D10`, `X8`) does not produce
+        /// a string longer than <see cref="TemplateContext.LimitToString"/>. Custom format strings (e.g `0.00`) are not checked.
+        /// </summary>
+        internal static void VerifyFormatPrecision(TemplateContext context, string format)
+        {
+            if (context is null) throw new ArgumentNullException(nameof(context));
+
+            var limitToString = context.LimitToString;
+            if (limitToString <= 0 || format.Length < 2 || !((format[0] >= 'A' && format[0] <= 'Z') || (format[0] >= 'a' && format[0] <= 'z')))
+            {
+                return;
+            }
+
+            long precision = 0;
+            for (int i = 1; i < format.Length; i++)
+            {
+                var c = format[i];
+                if (c < '0' || c > '9')
+                {
+                    // Not a standard format string
+                    return;
+                }
+
+                // Saturate to avoid overflow on very long precision specifiers
+                if (precision <= limitToString)
+                {
+                    precision = precision * 10 + (c - '0');
+                }
+            }
+
+            VerifyResultStringLength(limitToString, precision);
         }
 
         /// <summary>

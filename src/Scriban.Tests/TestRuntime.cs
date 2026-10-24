@@ -452,6 +452,121 @@ namespace Scriban.Tests
             StringAssert.Contains("LimitToString", exception!.Message);
         }
 
+        [TestCase("{{ x = 1.5 | math.format 'F10'; x | string.size }}")]
+        [TestCase("{{ x = 15 | math.format 'D10'; x | string.size }}")]
+        [TestCase("{{ x = 15 | math.format 'x9'; x | string.size }}")]
+        [TestCase("{{ x = 1.5 | object.format 'F10'; x | string.size }}")]
+        [TestCase("{{ x = 15 | object.format 'D10'; x | string.size }}")]
+        [TestCase("{{ x = 15 | object.format 'n99999999999'; x | string.size }}")]
+        public void NumberFormatPrecisionShouldRespectLimitToString(string script)
+        {
+            AssertLimitToStringExceeded(script, 8);
+        }
+
+        [Test]
+        public void NumberFormatWithinLimitToStringShouldWork()
+        {
+            AssertEvaluateWithLimitToString("1.5 | math.format 'F2'", 4, "1.50");
+            AssertEvaluateWithLimitToString("1234 | math.format '#,##0'", 5, "1,234");
+            AssertEvaluateWithLimitToString("1.5 | object.format '0.00'", 4, "1.50");
+            AssertEvaluateWithLimitToString("255 | object.format 'X8'", 8, "000000FF");
+            AssertEvaluateWithLimitToString("1 | math.format 'F10'", 0, "1.0000000000");
+        }
+
+        [TestCase("{{ x = regex.replace 'aaa' 'a' 'bb'; x | string.size }}")]
+        [TestCase("{{ x = regex.replace 'aaa' 'a+' '$0$0'; x | string.size }}")]
+        [TestCase("{{ x = regex.replace 'aaa' '(a+)' '$1$1'; x | string.size }}")]
+        public void RegexReplaceShouldRespectLimitToString(string script)
+        {
+            AssertLimitToStringExceeded(script, 5);
+        }
+
+        [Test]
+        public void RegexReplaceGrowthLoopShouldRespectLimitToString()
+        {
+            AssertLimitToStringExceeded("{{ s = 'a'; for i in 1..25; s = s | regex.replace 'a' 'aa'; end; s | string.size }}", 1000);
+        }
+
+        [Test]
+        public void RegexReplaceWithinLimitToStringShouldWork()
+        {
+            AssertEvaluateWithLimitToString("'abbbbcccd' | regex.replace 'b+c+' '-Yo-'", 6, "a-Yo-d");
+            AssertEvaluateWithLimitToString("'john smith' | regex.replace `(\\w+) (\\w+)` '$2 $1'", 10, "smith john");
+            // Growing first, then shrinking: the final result fits in the limit
+            AssertEvaluateWithLimitToString("'abbbb' | regex.replace `a|bbbb` 'xx'", 4, "xxxx");
+            AssertEvaluateWithLimitToString("regex.replace 'aaa' 'a' 'bbbbbbbb'", 0, "bbbbbbbbbbbbbbbbbbbbbbbb");
+        }
+
+        [Test]
+        public void StringEscapeShouldRespectLimitToString()
+        {
+            AssertLimitToStringExceeded("{{ x = '\"\"\"' | string.escape; x | string.size }}", 5);
+            AssertLimitToStringExceeded("{{ s = '\"'; for i in 1..20; s = s | string.escape; end; s | string.size }}", 1000);
+            // Control characters are escaped as `\xHH` (4 characters)
+            AssertLimitToStringExceeded("{{ x = text | string.escape; x | string.size }}", 7, "\u0001\u0002");
+            AssertEvaluateWithLimitToString("text | string.escape", 8, "\\x01\\x02", "\u0001\u0002");
+            AssertEvaluateWithLimitToString("'\"a\"' | string.escape", 5, "\\\"a\\\"");
+        }
+
+        [Test]
+        public void RegexEscapeShouldRespectLimitToString()
+        {
+            AssertLimitToStringExceeded("{{ x = 'a.b.c' | regex.escape; x | string.size }}", 6);
+            AssertLimitToStringExceeded("{{ s = '.'; for i in 1..20; s = s | regex.escape; end; s | string.size }}", 1000);
+            AssertEvaluateWithLimitToString("'a.b.c' | regex.escape", 7, "a\\.b\\.c");
+        }
+
+        [Test]
+        public void StringReplaceShouldRespectLimitToString()
+        {
+            AssertLimitToStringExceeded("{{ x = 'a' * 4 | string.replace 'a' 'aa'; x | string.size }}", 5);
+            AssertLimitToStringExceeded("{{ s = 'a'; for i in 1..25; s = s | string.replace 'a' 'aa'; end; s | string.size }}", 1000);
+            AssertEvaluateWithLimitToString("'aaaa' | string.replace 'a' 'b'", 4, "bbbb");
+            AssertEvaluateWithLimitToString("'abab' | string.replace 'b' 'cc'", 6, "accacc");
+            AssertEvaluateWithLimitToString("'abab' | string.replace 'b' 'cc'", 0, "accacc");
+        }
+
+        [Test]
+        public void DateToStringShouldRespectLimitToString()
+        {
+            AssertLimitToStringExceeded("{{ x = date.now | date.to_string ('%Y' * 3); x | string.size }}", 10);
+            AssertLimitToStringExceeded("{{ x = date.parse_to_string '2016/01/05' ('%Y' * 3); x | string.size }}", 10);
+            AssertEvaluateWithLimitToString("date.parse '2016/01/05' | date.to_string '%Y-%m-%d'", 10, "2016-01-05");
+            AssertEvaluateWithLimitToString("date.parse_to_string '2016/01/05' '%Y-%m-%d'", 10, "2016-01-05");
+            AssertEvaluateWithLimitToString("date.parse '2016/01/05' | date.to_string ('%Y' * 3)", 0, "201620162016");
+        }
+
+        private static void AssertLimitToStringExceeded(string script, int limitToString, string? text = null)
+        {
+            var template = Template.Parse(script);
+            Assert.False(template.HasErrors, template.Messages.ToString());
+            var context = CreateLimitToStringContext(limitToString, text);
+
+            var exception = Assert.Throws<ScriptRuntimeException>(() => template.Render(context));
+
+            StringAssert.Contains("LimitToString", exception!.Message);
+        }
+
+        private static void AssertEvaluateWithLimitToString(string expression, int limitToString, string expected, string? text = null)
+        {
+            // Evaluate instead of Render: rendering a string that reaches LimitToString truncates it with `...`
+            var template = Template.Parse(expression, lexerOptions: new LexerOptions { Mode = ScriptMode.ScriptOnly });
+            Assert.False(template.HasErrors, template.Messages.ToString());
+            var context = CreateLimitToStringContext(limitToString, text);
+
+            Assert.AreEqual(expected, template.Evaluate(context));
+        }
+
+        private static TemplateContext CreateLimitToStringContext(int limitToString, string? text)
+        {
+            var context = new TemplateContext { LimitToString = limitToString, OutputLimit = 0 };
+            if (text is not null)
+            {
+                context.PushGlobal(new ScriptObject { { "text", text } });
+            }
+            return context;
+        }
+
         [Test]
         public void ArraySizeShouldRespectLoopLimitForInternalIteration()
         {

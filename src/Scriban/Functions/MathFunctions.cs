@@ -197,6 +197,7 @@ namespace Scriban.Functions
             {
                 throw new ScriptRuntimeException(span, $"Unexpected `{value}`. Must be a formattable number");
             }
+            StringFunctions.VerifyFormatPrecision(context, format);
             return formattable.ToString(format, culture is not null ? new CultureInfo(culture) : context.CurrentCulture);
         }
 
