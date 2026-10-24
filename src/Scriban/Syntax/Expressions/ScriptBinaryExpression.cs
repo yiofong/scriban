@@ -730,10 +730,73 @@ namespace Scriban.Syntax
         }
 
         /// <summary>
-        /// Use this value as a maximum integer
+        /// Maximum supported shift amount
         /// </summary>
-        private static readonly BigInteger MaxBigInteger = BigInteger.One << 1024 * 1024;
         private const int MaxBigIntegerShift = 1024 * 1024;
+        // Maximum bit length of any big integer result (a 64-bit integer shifted by MaxBigIntegerShift fits)
+        private const long MaxBigIntegerBits = MaxBigIntegerShift + 64;
+
+        private static long GetBitLength(BigInteger value)
+        {
+            if (value.IsZero) return 0;
+#if NET5_0_OR_GREATER
+            return (long)BigInteger.Abs(value).GetBitLength();
+#else
+            return (long)Math.Floor(BigInteger.Log(BigInteger.Abs(value), 2)) + 1;
+#endif
+        }
+
+        private static void ThrowBigIntegerTooLarge(SourceSpan span, ScriptBinaryOperator op)
+        {
+            throw new ScriptRuntimeException(span, $"The result of the operator `{op.ToText()}` exceeds the maximum supported integer magnitude of `{MaxBigIntegerBits}` bits.");
+        }
+
+        private static BigInteger CheckBigIntegerResult(SourceSpan span, ScriptBinaryOperator op, BigInteger result)
+        {
+            if (GetBitLength(result) > MaxBigIntegerBits)
+            {
+                ThrowBigIntegerTooLarge(span, op);
+            }
+            return result;
+        }
+
+        private static BigInteger MultiplyBigInteger(TemplateContext context, SourceSpan span, BigInteger left, BigInteger right)
+        {
+            // The product has at least (leftBits + rightBits - 1) bits: reject it before computing it
+            if (GetBitLength(left) + GetBitLength(right) - 1 > MaxBigIntegerBits)
+            {
+                ThrowBigIntegerTooLarge(span, ScriptBinaryOperator.Multiply);
+            }
+            context.CheckAbort();
+            return CheckBigIntegerResult(span, ScriptBinaryOperator.Multiply, left * right);
+        }
+
+        private static BigInteger ShiftLeftBigInteger(TemplateContext context, SourceSpan span, BigInteger left, BigInteger right)
+        {
+            var shift = ValidateShiftAmount(span, right);
+            if (shift > 0 && GetBitLength(left) + shift > MaxBigIntegerBits)
+            {
+                ThrowBigIntegerTooLarge(span, ScriptBinaryOperator.ShiftLeft);
+            }
+            return left << shift;
+        }
+
+        private static BigInteger PowerBigInteger(TemplateContext context, SourceSpan span, BigInteger left, BigInteger right)
+        {
+            // 0, 1 and -1 never grow
+            if (BigInteger.Abs(left) <= BigInteger.One)
+            {
+                return left.IsZero ? (right.IsZero ? BigInteger.One : BigInteger.Zero) : (left.IsOne || right.IsEven ? BigInteger.One : BigInteger.MinusOne);
+            }
+
+            // |left| >= 2: the result has at least ((leftBits - 1) * right + 1) bits: reject it before computing it
+            if (right > MaxBigIntegerBits || (GetBitLength(left) - 1) * (long)right + 1 > MaxBigIntegerBits)
+            {
+                ThrowBigIntegerTooLarge(span, ScriptBinaryOperator.Power);
+            }
+            context.CheckAbort();
+            return CheckBigIntegerResult(span, ScriptBinaryOperator.Power, BigInteger.Pow(left, (int)right));
+        }
 
         private static object CalculateLongWithInt(TemplateContext context, ScriptBinaryOperator op, SourceSpan span, int leftInt, int rightInt)
         {
@@ -765,7 +828,7 @@ namespace Scriban.Syntax
                     }
                     else
                     {
-                        return BigInteger.ModPow(left, right, MaxBigInteger);
+                        return PowerBigInteger(context, span, left, right);
                     }
 
                 case ScriptBinaryOperator.BinaryOr:
@@ -816,18 +879,18 @@ namespace Scriban.Syntax
             switch (op)
             {
                 case ScriptBinaryOperator.Add:
-                    return left + right;
+                    return CheckBigIntegerResult(span, op, left + right);
                 case ScriptBinaryOperator.Subtract:
-                    return left - right;
+                    return CheckBigIntegerResult(span, op, left - right);
                 case ScriptBinaryOperator.Multiply:
-                    return left * right;
+                    return MultiplyBigInteger(context, span, left, right);
                 case ScriptBinaryOperator.Divide:
                     return (double)left / (double)right;
                 case ScriptBinaryOperator.DivideRound:
                     return left / right;
 
                 case ScriptBinaryOperator.ShiftLeft:
-                    return left << ValidateShiftAmount(span, right);
+                    return ShiftLeftBigInteger(context, span, left, right);
                 case ScriptBinaryOperator.ShiftRight:
                     return left >> ValidateShiftAmount(span, right);
 
@@ -838,7 +901,7 @@ namespace Scriban.Syntax
                     }
                     else
                     {
-                        return BigInteger.ModPow(left, right, MaxBigInteger);
+                        return PowerBigInteger(context, span, left, right);
                     }
 
                 case ScriptBinaryOperator.BinaryOr:

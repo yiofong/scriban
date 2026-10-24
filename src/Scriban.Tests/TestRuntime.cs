@@ -321,6 +321,109 @@ namespace Scriban.Tests
             StringAssert.Contains("Shift amount", exception!.Message);
         }
 
+        [TestCase("{{ x = 1 << 1000000; for i in 1..6; x = x * x; end; 'done' }}")]
+        [TestCase("{{ x = 1 << 1048576; x << 1048576 }}")]
+        [TestCase("{{ x = 1 << 1048576; x = x << 63; x + x }}")]
+        [TestCase("{{ x = 1 << 1048576; x = x << 63; -x - x }}")]
+        public void BigIntegerOperationsShouldRejectOversizedResults(string script)
+        {
+            var template = Template.Parse(script);
+
+            var exception = Assert.Throws<ScriptRuntimeException>(() => template.Render());
+
+            StringAssert.Contains("exceeds the maximum supported integer magnitude", exception!.Message);
+        }
+
+        [TestCase("3 ^ 2000000")]
+        [TestCase("(1 << 1000) ^ 2000")]
+        [TestCase("2 ^ (1 << 100)")]
+        public void BigIntegerPowerShouldRejectOversizedResults(string script)
+        {
+            var template = Template.Parse(script, lexerOptions: new LexerOptions { Lang = ScriptLang.Scientific, Mode = ScriptMode.ScriptOnly });
+
+            var exception = Assert.Throws<ScriptRuntimeException>(() => template.Render());
+
+            StringAssert.Contains("exceeds the maximum supported integer magnitude", exception!.Message);
+        }
+
+        [TestCase("{{ (1 << 100) * (1 << 100) == 1 << 200 }}", "true")]
+        [TestCase("{{ ((1 << 1048576) - 1) > 0 }}", "true")]
+        public void BigIntegerOperationsShouldWorkWithinLimits(string script, string expected)
+        {
+            Assert.AreEqual(expected, Template.Parse(script).Render());
+        }
+
+        [TestCase("2 ^ 10", "1024")]
+        [TestCase("2 ^ 64", "18446744073709551616")]
+        [TestCase("(-2) ^ 3", "-8")]
+        [TestCase("0 ^ 0", "1")]
+        [TestCase("0 ^ 5", "0")]
+        [TestCase("(-1) ^ 1000000001", "-1")]
+        [TestCase("1 ^ (1 << 100)", "1")]
+        public void BigIntegerPowerShouldWorkWithinLimits(string script, string expected)
+        {
+            var template = Template.Parse(script, lexerOptions: new LexerOptions { Lang = ScriptLang.Scientific, Mode = ScriptMode.ScriptOnly });
+            Assert.AreEqual(expected, template.Render());
+        }
+
+        [TestCase("{{ a = [1]; a[0] = a; b = [1]; b[0] = b; a == b }}")]
+        [TestCase("{{ a = []; b = []; for i in 1..450; a = [a]; b = [b]; end; a == b }}")]
+        [TestCase("{{ a = []; b = []; for i in 1..450; a = [a]; b = [b]; end; a < b }}")]
+        public void ArrayComparisonShouldRejectDeepOrCyclicArrays(string script)
+        {
+            var template = Template.Parse(script);
+
+            var exception = Assert.Throws<ScriptRuntimeException>(() => template.Render());
+
+            StringAssert.Contains("Structure is too deeply nested or contains reference loops", exception!.Message);
+        }
+
+        [Test]
+        public void ArrayComparisonShouldRespectLoopLimit()
+        {
+            // Arrays sharing structure are cheap to build but exponential to compare
+            var template = Template.Parse("{{ a = [1]; b = [1]; for i in 1..18; a = [a, a]; b = [b, b]; end; a == b }}");
+
+            var exception = Assert.Throws<ScriptRuntimeException>(() => template.Render());
+
+            StringAssert.Contains("Exceeding number of iteration limit", exception!.Message);
+        }
+
+        [Test]
+        public void ArrayComparisonShouldCheckCancellation()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var context = new TemplateContext { CancellationToken = cancellation.Token };
+            var globals = new ScriptObject();
+            globals.Import("cancel", new Action(cancellation.Cancel));
+            context.PushGlobal(globals);
+
+            var template = Template.Parse("{{ (cancel) == null || [1, 2] == [1, 2] }}");
+
+            Assert.Throws<ScriptAbortException>(() => template.Render(context));
+        }
+
+        [TestCase("{{ [[1, 2], [3]] == [[1, 2], [3]] }}", "true")]
+        [TestCase("{{ [[1, 2], [3]] == [[1, 2], [4]] }}", "false")]
+        [TestCase("{{ [1, 2] < [2, 3] }}", "true")]
+        [TestCase("{{ [] == [] }}", "true")]
+        public void ArrayComparisonShouldWorkWithinLimits(string script, string expected)
+        {
+            Assert.AreEqual(expected, Template.Parse(script).Render());
+        }
+
+        [TestCase("{{ s = 'object.eval s'; object.eval s }}")]
+        [TestCase("{{ s = '{{ object.eval_template s }}'; object.eval_template s }}")]
+        public void ObjectEvalShouldRespectRecursiveLimit(string script)
+        {
+            var template = Template.Parse(script);
+            Assert.False(template.HasErrors, template.Messages.ToString());
+
+            var exception = Assert.Catch<Exception>(() => template.Render());
+
+            StringAssert.Contains("recursive depth limit", exception!.Message);
+        }
+
         [Test]
         public void RangeExpressionShouldRespectLoopLimit()
         {

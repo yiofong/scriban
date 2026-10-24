@@ -740,15 +740,24 @@ namespace Scriban.Runtime
             }
 
             // Otherwise we need to compare each element
-            for (var i = 0; i < leftItems.Count; i++)
+            // Nested comparisons are bounded by ObjectRecursionLimit
+            context.EnterObjectCompare(span);
+            try
             {
-                context.StepLoop(span);
-                var leftValue = leftItems[i];
-                var rightValue = rightItems[i];
-                if (ScriptBinaryExpression.Evaluate(context, span, op, leftValue, rightValue) is not true)
+                for (var i = 0; i < leftItems.Count; i++)
                 {
-                    return false;
+                    context.StepLoop(span);
+                    var leftValue = leftItems[i];
+                    var rightValue = rightItems[i];
+                    if (ScriptBinaryExpression.Evaluate(context, span, op, leftValue, rightValue) is not true)
+                    {
+                        return false;
+                    }
                 }
+            }
+            finally
+            {
+                context.ExitObjectCompare();
             }
 
             return true;

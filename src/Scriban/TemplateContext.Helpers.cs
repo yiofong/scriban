@@ -83,6 +83,25 @@ namespace Scriban
         private long _currentOutputLength;
         private bool _hasOutputLimitEllipsis;
         private int _renderDepth;
+        private int _objectCompareLevel;
+
+        /// <summary>
+        /// Called when comparing nested structures (e.g arrays) to guard against deep nesting or reference loops.
+        /// </summary>
+        internal void EnterObjectCompare(SourceSpan span)
+        {
+            _objectCompareLevel++;
+            if (ObjectRecursionLimit != 0 && _objectCompareLevel > ObjectRecursionLimit)
+            {
+                _objectCompareLevel--;
+                throw new ScriptRuntimeException(span, "Structure is too deeply nested or contains reference loops.");
+            }
+        }
+
+        internal void ExitObjectCompare()
+        {
+            _objectCompareLevel--;
+        }
 
         /// <summary>
         /// Called whenever an objects is converted to a string. This method can be overriden.

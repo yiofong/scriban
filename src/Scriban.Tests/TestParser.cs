@@ -955,6 +955,34 @@ m
             StringAssert.Contains("The statement depth limit `250` was reached when parsing this statement", template.Messages[0].ToString());
         }
 
+        [TestCase(".a")]
+        [TestCase("?.a")]
+        [TestCase("[0]")]
+        [TestCase("(1)")]
+        public void ExpressionDepthLimitAppliesToPostfixChains(string link)
+        {
+            // Postfix chains nest the AST and must not be able to overflow the stack at evaluation
+            var chain = string.Concat(Enumerable.Repeat(link, 3000));
+            var template = Template.Parse($"{{{{ x = {{}}; x{chain} }}}}");
+
+            Assert.True(template.HasErrors);
+            StringAssert.Contains("The statement depth limit `250` was reached when parsing this statement", template.Messages[0].ToString());
+
+            // Short chains are still accepted
+            template = Template.Parse($"{{{{ x{string.Concat(Enumerable.Repeat(link, 100))} }}}}");
+            Assert.False(template.HasErrors, template.Messages.ToString());
+        }
+
+        [Test]
+        public void ExpressionDepthLimitAppliesToLiquidPostfixChains()
+        {
+            var chain = string.Concat(Enumerable.Repeat(".a", 3000));
+            var template = Template.ParseLiquid($"{{{{ x{chain} }}}}");
+
+            Assert.True(template.HasErrors);
+            StringAssert.Contains("The statement depth limit `250` was reached when parsing this statement", template.Messages[0].ToString());
+        }
+
         private static string CreateDeepExpression(string expressionKind, int depth)
         {
             switch (expressionKind)

@@ -75,6 +75,9 @@ namespace Scriban.Functions
 
             if (value is string templateStr)
             {
+                // A string evaluating itself recurses: bound it by RecursiveLimit like include
+                var caller = context.CurrentNode;
+                context.EnterRecursive(caller);
                 try
                 {
                     var template = Template.Parse(templateStr, lexerOptions: new LexerOptions() { Lang = context.Language, Mode = ScriptMode.ScriptOnly });
@@ -98,6 +101,10 @@ namespace Scriban.Functions
                 catch (Exception ex)
                 {
                     throw new ArgumentException(ex.Message, nameof(value));
+                }
+                finally
+                {
+                    context.ExitRecursive(caller);
                 }
             }
 
@@ -130,6 +137,9 @@ namespace Scriban.Functions
 
             if (value is string templateStr)
             {
+                // A template evaluating itself recurses: bound it by RecursiveLimit like include
+                var caller = context.CurrentNode;
+                context.EnterRecursive(caller);
                 try
                 {
                     var template = Template.Parse(templateStr, lexerOptions: new LexerOptions() { Lang = context.Language, Mode = ScriptMode.Default });
@@ -151,6 +161,10 @@ namespace Scriban.Functions
                 catch (Exception ex)
                 {
                     throw new ArgumentException(ex.Message, nameof(value));
+                }
+                finally
+                {
+                    context.ExitRecursive(caller);
                 }
             }
 

@@ -243,6 +243,8 @@ namespace Scriban.Parsing
                         var nextToken = PeekToken();
                         if (nextToken.Type == TokenType.Identifier)
                         {
+                            // Each member link nests the AST: count it against the expression depth limit
+                            EnterExpression();
                             var dotToken = ParseToken(Current.Type);
 
                             var currentAsText = GetAsText(Current);
@@ -314,6 +316,8 @@ namespace Scriban.Parsing
                     // unit test: 130-indexer-accessor-accept1.txt
                     if (Current.Type == TokenType.OpenBracket && (leftOperand is IScriptVariablePath || leftOperand is ScriptLiteral || leftOperand is ScriptFunctionCall) && !IsPreviousCharWhitespace())
                     {
+                        // Each indexer link nests the AST: count it against the expression depth limit
+                        EnterExpression();
                         var indexerExpression = Open<ScriptIndexerExpression>();
                         indexerExpression.Span = leftOperand.Span;
                         indexerExpression.Target = leftOperand;
@@ -647,6 +651,8 @@ namespace Scriban.Parsing
                             // Regular function call target(arg0, arg1, arg3, arg4...)
                             if (Current.Type == TokenType.OpenParen && !IsPreviousCharWhitespace())
                             {
+                                // Each explicit call link nests the AST: count it against the expression depth limit
+                                EnterExpression();
                                 // This is an explicit call
                                 functionCall.ExplicitCall = true;
                                 functionCall.OpenParent = ParseToken(TokenType.OpenParen);
