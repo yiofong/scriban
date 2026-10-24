@@ -2037,6 +2037,59 @@ Tax: {{ 7 | match_tax }}";
         }
 
         [Test]
+        public void TestFunctionValuesDoNotExposeMembers()
+        {
+            var service = new ServiceWithSecret();
+            var apiKey = "closure-secret";
+            var globals = new ScriptObject();
+            globals.Import("greet", new Func<string, string>(service.Greet));
+            globals.Import("sign", new Func<string, string>(s => s + ":" + apiKey.Length));
+            globals["obj"] = new ObjectWithDelegate { Callback = service.Greet };
+
+            var context = new TemplateContext();
+            context.PushGlobal(globals);
+
+            // Delegate targets (instance method target or lambda closure) must not be reachable
+            Assert.AreEqual("0", Render("{{ [@greet] | array.map 'target' | array.size }}"));
+            Assert.AreEqual("0", Render("{{ [@sign] | array.map 'target' | array.size }}"));
+            Assert.AreEqual("0", Render("{{ [@greet] | array.map 'method' | array.size }}"));
+
+            // Builtins must not expose reflection objects
+            Assert.AreEqual("0", Render("{{ [@string.upcase] | array.map 'return_type' | array.size }}"));
+            Assert.AreEqual("0", Render("{{ [@string.upcase] | array.map 'method' | array.size }}"));
+            Assert.AreEqual("0", Render("{{ [@date.now] | array.map 'return_type' | array.size }}"));
+
+            // Script functions must not expose their AST
+            Assert.AreEqual("0", Render("{{ func f; ret 1; end; [@f] | array.map 'body' | array.size }}"));
+
+            // Raw delegates reachable from host objects must not expose their target
+            Assert.AreEqual("0", Render("{{ [obj.callback] | array.map 'target' | array.size }}"));
+            Assert.Throws<ScriptRuntimeException>(() => Render("{{ obj.callback.target.secret = 'changed' }}"));
+
+            // Script objects that are also functions (e.g. `date`) keep their members
+            Assert.AreEqual("true", Render("{{ ([@date] | array.map 'now' | array.size) == 1 }}"));
+            Assert.AreEqual("Hello bob", Render("{{ greet 'bob' }}"));
+            Assert.AreEqual("a:14", Render("{{ sign 'a' }}"));
+
+            Assert.AreEqual("secret", service.Secret);
+            Assert.AreEqual("closure-secret", apiKey);
+
+            string Render(string script) => Template.Parse(script).Render(context);
+        }
+
+        private class ServiceWithSecret
+        {
+            public string Secret { get; set; } = "secret";
+
+            public string Greet(string name) => "Hello " + name;
+        }
+
+        private class ObjectWithDelegate
+        {
+            public Func<string, string>? Callback { get; set; }
+        }
+
+        [Test]
         public void TestNullableArgument()
         {
             var template = Template.Parse("{{ tester 'input1' 1 }}");

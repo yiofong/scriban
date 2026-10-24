@@ -1001,7 +1001,12 @@ namespace Scriban
             var type = target.GetType();
             if (!_memberAccessors.TryGetValue(type, out var accessor))
             {
-                accessor = GetMemberAccessorImpl(target) ?? NullAccessor.Default;
+                // Function values (and raw delegates) are opaque: never expose their .NET internals
+                // (delegate target/closure, MethodInfo, script AST...) to templates.
+                // Script objects that are also functions (e.g `date`) keep their script members.
+                accessor = (target is Delegate || (target is IScriptCustomFunction && target is not IScriptObject))
+                    ? NullAccessor.Default
+                    : GetMemberAccessorImpl(target) ?? NullAccessor.Default;
                 _memberAccessors.Add(type, accessor);
             }
             return accessor;

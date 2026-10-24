@@ -15,6 +15,8 @@ For untrusted templates, the host application is responsible for exposing only d
 
 When a template accesses a reflected .NET object directly, it can assign to public fields and public non-`init` property or indexer setters. Properties with private, internal, protected, or `init` setters are read-only to templates. `MemberFilter` controls which reflected members are exposed, but it does not provide separate read and write filtering.
 
+Function values (builtins, imported delegates, script `func` functions) and raw .NET delegates are opaque to templates: they can be called or passed around, but their .NET members (such as a delegate target, a captured closure or a `MethodInfo`) are never exposed.
+
 The practical exposure boundary is therefore:
 
 - which globals and builtins you expose through [`ScriptObject`](scriptobject.md)
